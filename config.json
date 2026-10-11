@@ -1,0 +1,35 @@
+{
+  "groups": [
+    {
+      "name": "Nghiện In 3D",
+      "url": "https://www.facebook.com/groups/596759972094814/",
+      "group_keys": [
+        "596759972094814",
+        "elegoovietnam"
+      ]
+    },
+    {
+      "name": "Cộng đồng In 3D Việt Nam",
+      "url": "https://www.facebook.com/groups/850690203270746/",
+      "group_keys": [
+        "850690203270746"
+      ]
+    },
+    {
+      "name": "In 3D Sinh Viên",
+      "url": "https://www.facebook.com/groups/2812960898952855/",
+      "group_keys": [
+        "2812960898952855"
+      ]
+    }
+  ],
+  "interval_seconds": 3600,
+  "lookback_days": 1,
+  "max_posts_per_group": 300,
+  "max_scroll_rounds": 80,
+  "article_selector": "[role='article']",
+  "expand_labels": [
+    "Xem thêm",
+    "See more"
+  ]
+}
