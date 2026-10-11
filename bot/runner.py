@@ -7,6 +7,7 @@ from datetime import datetime
 
 from . import facebook, zalo
 from .lead_filter import analyze
+from .storage import text_key
 
 log = logging.getLogger(__name__)
 
@@ -89,17 +90,36 @@ class Runner:
                      time.monotonic() - started, self.sent)
         return errors
 
-    def run_forever(self, listener):
-        """Quet ngay, roi cu interval_seconds quet lai; nhan "scan" trong Zalo de quet som."""
+    def run_forever(self, listener, open_page):
+        """Quet ngay, roi cu interval_seconds (tinh tu luc bat dau luot) quet lai.
+
+        Moi luot mo trinh duyet moi bang open_page() roi dong lai: khong giu Chromium
+        chay khong hang gio, va trinh duyet loi/bi dong o luot nay khong lam chet bot.
+        Nhan "scan" trong Zalo de quet som.
+        """
         interval = self.config["interval_seconds"]
         manual = False
         while True:
-            errors = self.scan_all(keep_going=True)
+            started = time.time()
+            try:
+                with open_page() as page:
+                    self.page = page
+                    errors = self.scan_all(keep_going=True)
+            except facebook.SessionExpired:
+                raise
+            except Exception as error:
+                reason = short_error(error)
+                log.error("Luot quet loi: %s: %s; thu lai o luot sau", type(error).__name__, reason)
+                log.debug("Traceback luot quet", exc_info=True)
+                errors = [reason]
+            finally:
+                self.page = None
             if manual:
                 self._send_summary(errors)
-            next_at = datetime.fromtimestamp(time.time() + interval).strftime("%H:%M")
+            wait = max(60, started + interval - time.time())
+            next_at = datetime.fromtimestamp(time.time() + wait).strftime("%H:%M")
             log.info("Luot quet tiep theo luc %s (hoac nhan \"scan\" trong nhom Zalo)", next_at)
-            manual = listener.wait(interval)
+            manual = listener.wait(wait)
             if manual:
                 log.info("Nhan lenh scan tu Zalo: quet ngay")
 
@@ -146,8 +166,10 @@ class Runner:
             return "khong con khop bo loc"
         if facebook.link_key(row["url"]) in seen:
             return "trung link"
-        if self.store.was_sent(row["url"]):
-            return "da gui truoc do"
+        if text_key(row["content"]) in seen:
+            return "trung noi dung voi bai vua gui"
+        if self.store.was_sent(row["url"], row["content"]):
+            return "da gui truoc do (cung link hoac cung noi dung)"
         return None
 
     def flush_pending(self):
@@ -160,7 +182,7 @@ class Runner:
                 log.debug("Bo bai trong hang doi %s: %s", row["url"], reason)
                 self.store.clear_pending(row["post_id"])
                 continue
-            seen.add(facebook.link_key(row["url"]))
+            seen.update(key for key in (facebook.link_key(row["url"]), text_key(row["content"])) if key)
             category = analyze(row["content"])["category"]
             message = format_link_message(category, row["group_name"], row["published_label"],
                                           row["published_at"], row["content"], row["url"])
@@ -169,7 +191,7 @@ class Runner:
             except zalo.ZaloError as error:
                 log.warning("Chua gui duoc, giu trong hang doi: %s", error)
                 break
-            self.store.mark_sent(row["url"])
+            self.store.mark_sent(row["url"], row["content"])
             self.store.clear_pending(row["post_id"])
             sent += 1
             log.info("Da gui vao Zalo: %s", row["url"])

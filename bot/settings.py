@@ -19,8 +19,8 @@ LOG_FILE = LOG_DIR / "bot.log"
 EXIT_SESSION_EXPIRED = 42
 
 DEFAULTS = {
-    "interval_seconds": 3600,
-    "lookback_days": 7,
+    "interval_seconds": 7200,  # 2 gio
+    "lookback_days": 1,       # 24 gio
     "max_posts_per_group": 300,
     "max_scroll_rounds": 80,
     "article_selector": "[role='article']",

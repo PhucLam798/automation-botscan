@@ -1,11 +1,25 @@
 """SQLite: bai da doc, hang doi gui, link da gui (chong gui trung)."""
+import hashlib
 import logging
+import re
 import sqlite3
 import time
 
 from .facebook import link_key
+from .lead_filter import normalize
 
 log = logging.getLogger(__name__)
+
+MIN_TEXT_KEY_LENGTH = 30  # bai qua ngan ("can in ib") de trung noi dung giua nguoi khac nhau
+
+
+def text_key(content):
+    """Khoa theo noi dung: cung mot bai dang lai/dang o nhieu nhom chi gui mot lan."""
+    text = normalize(re.sub(r"https?://\S+", "", content or ""))
+    text = re.sub(r"[^a-z0-9 ]+", "", text).strip()
+    if len(text) < MIN_TEXT_KEY_LENGTH:
+        return None
+    return "text:" + hashlib.sha1(text.encode()).hexdigest()
 
 
 class Store:
@@ -29,6 +43,13 @@ class Store:
         db.execute("""CREATE TABLE IF NOT EXISTS sent_links (
             chat_id TEXT NOT NULL, link_key TEXT NOT NULL, sent_at REAL NOT NULL,
             PRIMARY KEY (chat_id, link_key))""")
+        # Bai da gui truoc khi co khoa noi dung: bo sung khoa de bai dang lai cung bi chan.
+        sent = {(row[0], row[1]): row[2] for row in db.execute("SELECT * FROM sent_links")}
+        for url, content in db.execute("SELECT url, content FROM posts"):
+            key = text_key(content)
+            for (chat, link), sent_at in sent.items():
+                if key and link == link_key(url):
+                    db.execute("INSERT OR IGNORE INTO sent_links VALUES (?, ?, ?)", (chat, key, sent_at))
         db.commit()
 
     def close(self):
@@ -70,11 +91,17 @@ class Store:
         with self.db:
             self.db.execute("UPDATE posts SET pending=0 WHERE post_id=?", (post_id,))
 
-    def was_sent(self, url):
-        return self.db.execute("SELECT 1 FROM sent_links WHERE chat_id=? AND link_key=?",
-                               (self.recipient, link_key(url))).fetchone() is not None
+    def was_sent(self, url, content=None):
+        """Da gui link nay, hoac mot bai cung noi dung (vd dang o nhieu nhom)."""
+        keys = [key for key in (link_key(url), text_key(content)) if key]
+        marks = ",".join("?" * len(keys))
+        return self.db.execute(f"SELECT 1 FROM sent_links WHERE chat_id=? AND link_key IN ({marks})",
+                               (self.recipient, *keys)).fetchone() is not None
 
-    def mark_sent(self, url):
+    def mark_sent(self, url, content=None):
+        now = time.time()
         with self.db:
-            self.db.execute("INSERT OR IGNORE INTO sent_links VALUES (?, ?, ?)",
-                            (self.recipient, link_key(url), time.time()))
+            for key in (link_key(url), text_key(content)):
+                if key:
+                    self.db.execute("INSERT OR IGNORE INTO sent_links VALUES (?, ?, ?)",
+                                    (self.recipient, key, now))

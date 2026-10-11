@@ -267,7 +267,10 @@ def browser_page(headless=True):
         try:
             yield context.new_page()
         finally:
-            context.close()
+            try:
+                context.close()
+            except Exception as error:  # Ctrl+C/trinh duyet da tu dong: khong che loi goc
+                log.debug("Dong trinh duyet: %s", str(error).splitlines()[0] if str(error) else error)
 
 
 def check_access(page):

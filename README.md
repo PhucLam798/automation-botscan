@@ -2,7 +2,8 @@
 
 Bot đọc bài trong các nhóm Facebook mà tài khoản của bạn đã tham gia (Python + Playwright). Bài nào có người cần thuê/nhờ in 3D thì bot gửi **mỗi bài một tin** vào **nhóm Zalo**, kèm trích đoạn, thời gian đăng và link bài gốc.
 
-- Tự quét định kỳ (mặc định 1 giờ). Mỗi bài chỉ gửi một lần.
+- Chạy `python3 main.py` là bot chạy liên tục: **cứ 2 giờ quét lại các bài đăng trong 24 giờ qua**, có bài cần in mới thì gửi, không có thì thôi.
+- Chống gửi trùng: mỗi link chỉ gửi một lần; bài cùng nội dung đăng ở nhiều nhóm (hoặc đăng lại) cũng chỉ gửi một lần.
 - Nhắn **`scan`** (hoặc `quét`, `@TênBot scan`) trong nhóm Zalo để quét ngay.
 - Dùng Zalo Bot Platform chính thức, **không cần** webhook hay tên miền.
 
@@ -57,7 +58,7 @@ Tùy chọn thêm: `--group "Tên nhóm"` (chỉ quét một nhóm), `--hours 24
 `config.json`:
 
 - `groups`: danh sách nhóm. `group_keys` là phần sau `/groups/` trong link. Nếu link nhóm dùng tên nhưng link bài dùng ID số, thêm cả hai: `["tennhom", "123456789"]`. Nhóm không chuyên in 3D thì thêm `"is_3d_group": false` để lọc chặt hơn.
-- `interval_seconds`: khoảng cách giữa hai lần quét (tối thiểu 60).
+- `interval_seconds`: khoảng cách giữa hai lần quét, tính từ lúc bắt đầu lượt trước (mặc định 7200 = 2 giờ, tối thiểu 60). Mỗi lượt mở trình duyệt, quét xong thì đóng.
 - `lookback_days`: chỉ lấy bài trong N ngày gần nhất (1 = 24 giờ). Bot dừng cuộn khi gặp 3 bài cũ hơn mốc này liên tiếp.
 - `max_posts_per_group`, `max_scroll_rounds`: giới hạn an toàn mỗi lượt.
 - `article_selector`, `expand_labels`: selector/nhãn nút "Xem thêm" của Facebook; chỉ sửa khi `--inspect` báo sai.

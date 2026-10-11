@@ -100,24 +100,31 @@ def cmd_scan(args, config, groups):
         install.ensure_zalo_ready()
     chat = env("ZALO_CHAT_ID")
     store = Store(DB_FILE, chat)
+    open_page = lambda: facebook.browser_page(headless=not args.headed)  # noqa: E731
     try:
-        with facebook.browser_page(headless=not args.headed) as page:
-            runner = Runner(page, config, store, groups, mode, recheck=args.recheck, debug=args.debug)
-            if mode != "send" or args.once:
+        runner = Runner(None, config, store, groups, mode, recheck=args.recheck, debug=args.debug)
+        if mode != "send" or args.once:
+            with open_page() as page:
+                runner.page = page
                 runner.scan_all()
-                return
-            listener = zalo.Listener(chat).start()
-            try:
-                minutes = config["interval_seconds"] // 60
-                zalo.send_text(f"🤖 Bot tìm khách in 3D đã bật: tự quét mỗi {minutes} phút, "
-                               "gửi từng link bài cần in vào nhóm. Nhắn \"scan\" để quét ngay.")
-                log.info("Tu quet moi %d phut; nhan 'scan' trong nhom Zalo de quet ngay. Ctrl+C de dung.",
-                         minutes)
-                runner.run_forever(listener)
-            finally:
-                listener.stop()
+            return
+        listener = zalo.Listener(chat).start()
+        try:
+            every = format_duration(config["interval_seconds"] / 3600)
+            window = format_duration(config["lookback_days"] * 24)
+            zalo.send_text(f"🤖 Bot tìm khách in 3D đã bật: cứ {every} quét bài trong {window} qua, "
+                           "chỉ gửi bài cần in MỚI (không gửi lại bài đã gửi). Nhắn \"scan\" để quét ngay.")
+            log.info("Cu %s quet bai trong %s qua; nhan 'scan' trong nhom Zalo de quet ngay. Ctrl+C de dung.",
+                     every, window)
+            runner.run_forever(listener, open_page)
+        finally:
+            listener.stop()
     finally:
         store.close()
+
+
+def format_duration(hours):
+    return f"{hours:g} giờ" if hours >= 1 else f"{hours * 60:g} phút"
 
 
 def run(args):

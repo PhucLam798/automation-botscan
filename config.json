@@ -23,7 +23,7 @@
       ]
     }
   ],
-  "interval_seconds": 3600,
+  "interval_seconds": 7200,
   "lookback_days": 1,
   "max_posts_per_group": 300,
   "max_scroll_rounds": 80,
