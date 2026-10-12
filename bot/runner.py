@@ -40,16 +40,20 @@ def short_error(error):
 
 
 class Runner:
-    """mode: "send" gui Zalo, "dry-run" chi in ra man hinh, "bootstrap" luu lam moc khong gui."""
+    """mode: "send" gui Zalo, "dry-run" chi in ra man hinh, "bootstrap" luu lam moc khong gui,
+    "ai-test" chi chay binh luan AI (in ra man hinh), khong luu/gui link.
 
-    def __init__(self, page, config, store, groups, mode="send", recheck=False, debug=False):
+    commenter (bot.commenter.Commenter): neu co, sau moi nhom cho AI doc bai can in va binh luan.
+    """
+
+    def __init__(self, page, config, store, groups, mode="send", debug=False, commenter=None):
         self.page = page
         self.config = config
         self.store = store
         self.groups = groups
         self.mode = mode
-        self.recheck = recheck
         self.debug = debug
+        self.commenter = commenter
         self.sent = 0           # so link da gui trong luot quet hien tai
         self._printed = set()   # dry-run: link da in
 
@@ -67,6 +71,8 @@ class Runner:
         """
         started = time.monotonic()
         self.sent = self.flush_pending() if self.sending else 0
+        if self.commenter:
+            self.commenter.start_run()
         errors = []
         for group in self.groups:
             try:
@@ -74,8 +80,6 @@ class Runner:
             except facebook.SessionExpired:
                 raise
             except Exception as error:
-                if self.debug:
-                    facebook.save_snapshot(self.page, group["name"])
                 if not keep_going:
                     raise
                 reason = short_error(error)
@@ -84,11 +88,26 @@ class Runner:
                 errors.append(f"{group['name']}: {reason}")
                 continue
             self._store(group, posts)
+            if self.commenter:
+                self._comment(self.commenter.process, self.page, group, posts)
         if self.sending:
             self.sent += self.flush_pending()
             log.info("Xong luot quet sau %.0f giay: da gui %d link moi vao Zalo",
                      time.monotonic() - started, self.sent)
+        if self.commenter:  # sau khi gui link: dang binh luan co the mat 20-40 phut
+            self._comment(self.commenter.finish_run, self.page)
         return errors
+
+    def _comment(self, step, *args):
+        """Loi binh luan AI khong duoc lam dung quet nhom/gui link Zalo."""
+        try:
+            step(*args)
+        except facebook.SessionExpired:
+            raise
+        except Exception as error:
+            log.error("Loi binh luan AI: %s: %s", type(error).__name__, short_error(error))
+            log.debug("Traceback binh luan AI", exc_info=True)
+            self.commenter.ai_halted = self.commenter.ai_halted or f"loi: {short_error(error)}"
 
     def run_forever(self, listener, open_page):
         """Quet ngay, roi cu interval_seconds (tinh tu luc bat dau luot) quet lai.
@@ -124,23 +143,26 @@ class Runner:
                 log.info("Nhan lenh scan tu Zalo: quet ngay")
 
     def _store(self, group, posts):
+        if self.mode == "ai-test":
+            return
         added = 0
         for post in posts:
             if self.mode == "dry-run":
                 self._print_post(post)
             else:
-                added += self.store.record(post, pending=post["candidate"] and self.sending,
-                                           recheck=self.recheck)
+                added += self.store.record(post, pending=post["candidate"] and self.sending)
         log.info("%s: %d bai trong khung thoi gian, %d bai moi, %d can in",
                  group["name"], len(posts), added, sum(p["candidate"] for p in posts))
 
     def _on_found(self, post):
         """Gui ngay bai can in vua tim thay, khong doi quet xong ca nhom."""
+        if self.mode == "ai-test":
+            return
         log.info("Tim thay bai can in: %s", post["url"])
         if self.mode == "dry-run":
             self._print_post(post)
             return
-        self.store.record(post, pending=self.sending, recheck=self.recheck)
+        self.store.record(post, pending=self.sending)
         if self.sending:
             self.sent += self.flush_pending()
 
@@ -162,7 +184,7 @@ class Runner:
             return "cu hon khung thoi gian hoac khong ro ngay"
         if not any(facebook.canonical_link(row["url"], group) for group in self.config["groups"]):
             return "link khong thuoc nhom trong config.json"
-        if not analyze(row["content"])["category"]:
+        if not self._category(row["content"]):
             return "khong con khop bo loc"
         if facebook.link_key(row["url"]) in seen:
             return "trung link"
@@ -171,6 +193,9 @@ class Runner:
         if self.store.was_sent(row["url"], row["content"]):
             return "da gui truoc do (cung link hoac cung noi dung)"
         return None
+
+    def _category(self, content):
+        return analyze(content, exclude=self.config["exclude_re"])["category"]
 
     def flush_pending(self):
         """Gui cac bai dang cho trong DB. Zalo loi -> dung, giu hang doi cho luot sau."""
@@ -183,7 +208,7 @@ class Runner:
                 self.store.clear_pending(row["post_id"])
                 continue
             seen.update(key for key in (facebook.link_key(row["url"]), text_key(row["content"])) if key)
-            category = analyze(row["content"])["category"]
+            category = self._category(row["content"])
             message = format_link_message(category, row["group_name"], row["published_label"],
                                           row["published_at"], row["content"], row["url"])
             try:
@@ -201,6 +226,9 @@ class Runner:
     def _send_summary(self, errors):
         note = (f"Quét xong: {self.sent} link mới." if self.sent else
                 "Quét xong: chưa có bài cần in mới trong phạm vi đã đọc.")
+        if self.commenter and self.commenter.live:
+            stop = self.commenter.stop_reason
+            note += f" Bình luận AI: {self.commenter.posted}" + (f" ({stop})" if stop else "") + "."
         if errors:
             note += " Lỗi đọc nhóm: " + "; ".join(errors)
         try:

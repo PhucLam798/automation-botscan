@@ -3,7 +3,8 @@ ben ban dich vu, hoi loi may, mua ban may/nhua hay in an 2D.
 
 Cach lam:
 1. Chuan hoa: bo dau, viet thuong, doi teencode (mk -> minh, ib -> inbox, ...).
-2. Loai ngay: bai quang cao dich vu, tuyen dung, in an 2D khong lien quan 3D.
+2. Loai ngay: bai co tu khoa loai tru (config.json "exclude_keywords": HN, in resin, pass may...),
+   quang cao dich vu, tuyen dung, in an 2D khong lien quan 3D.
 3. Tim y dinh "nho/thue/tim cho in" (manh) va "can/muon in" (yeu).
 4. Y dinh yeu bi chan neu bai la hoi ky thuat / mua ban may.
 """
@@ -38,6 +39,13 @@ _SLANG = [
     (r"\b(?:sp)\b", "san pham"),
     (r"\b(?:file\s+)?(?:\.?stl|\.?obj|\.?3mf|\.?step|\.?stp)\b", "file stl"),
 ]
+
+
+def exclude_pattern(words):
+    """Regex khop bat ky tu khoa nao (bo dau, nguyen tu: "hn" khong khop "john"); None neu rong."""
+    parts = [r"\s+".join(map(re.escape, normalize(word).split())) for word in words or []]
+    parts = [part for part in parts if part]
+    return re.compile(r"(?<![a-z0-9])(?:" + "|".join(parts) + r")(?![a-z0-9])") if parts else None
 
 
 def prepare(text):
@@ -149,14 +157,18 @@ def _find(patterns, value):
     return [m.group(0).strip() for p in patterns if (m := re.search(p, value))]
 
 
-def analyze(text, printing_group=True):
+def analyze(text, printing_group=True, exclude=None):
     """Tra ve dict: category ('' neu khong phai khach), score, reasons, keywords.
 
     printing_group=False: nhom khong chuyen in 3D, bai phai nhac doi tuong in 3D.
+    exclude: regex tu exclude_pattern(); bai khop thi bo luon.
     """
     value = prepare(text)
     result = {"category": "", "score": 0, "reasons": [], "keywords": []}
     if not value:
+        return result
+    if exclude and (hit := exclude.search(normalize(text))):
+        result["reasons"].append("tu khoa loai tru: " + hit.group(0))
         return result
 
     strong = _find(STRONG, value)

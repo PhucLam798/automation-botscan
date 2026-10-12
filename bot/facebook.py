@@ -6,17 +6,19 @@ Phan 2 - dieu khien trinh duyet: mo nhom, cuon, bam "Xem them", doc khung bai.
 Giao dien Facebook thay doi thuong xuyen: kiem tra bang `main.py --inspect`.
 Khong tu dang nhap, khong vuot CAPTCHA, khong dung API noi bo.
 """
+import base64
 import json
 import logging
+import random
 import re
 import time
+import unicodedata
 import urllib.parse
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from .lead_filter import analyze, normalize
-from .settings import LOG_DIR, PROFILE_DIR
+from .settings import PROFILE_DIR
 
 log = logging.getLogger(__name__)
 
@@ -169,8 +171,8 @@ def unique_posts(posts):
     return result
 
 
-def extract_cards(raw_cards, group):
-    """Khung bai tho (tu EXTRACT_JS) -> danh sach post da phan loai."""
+def extract_cards(raw_cards, group, exclude=None):
+    """Khung bai tho (tu EXTRACT_JS) -> danh sach post da phan loai (exclude: regex tu khoa loai tru)."""
     posts = []
     for raw in raw_cards:
         candidates = {}
@@ -189,7 +191,7 @@ def extract_cards(raw_cards, group):
                 # Chi giu nhan de doc (vd "3 gio"); bo epoch/ISO.
                 label = "" if re.fullmatch(EPOCH, date) or re.match(r"\d{4}-\d{2}-\d{2}", date) else date
                 break
-        result = analyze(raw["text"], group.get("is_3d_group", True))
+        result = analyze(raw["text"], group.get("is_3d_group", True), exclude)
         posts.append({
             "id": post_id, "url": candidate["url"], "group": group["name"], "text": raw["text"],
             "category": result["category"], "candidate": bool(result["category"]),
@@ -363,7 +365,7 @@ def scan_group(page, group, config, on_post=None):
         _expand_posts(page, config)
         cards = read_cards(page, config, reveal_dates=True)
         added = 0
-        for post in extract_cards(cards, group):
+        for post in extract_cards(cards, group, config["exclude_re"]):
             previous = posts.get(post["id"])
             if previous is None:
                 added += 1
@@ -377,12 +379,18 @@ def scan_group(page, group, config, on_post=None):
         empty_rounds = 0 if added else empty_rounds + 1
 
         recent = [post for post in posts.values() if is_recent(post, days)]
+        stop = False
         if on_post:
             # Ngay dang co the doc duoc o vong sau, nen kiem tra lai moi vong.
             for post in recent:
                 if post["candidate"] and post["id"] not in notified:
                     notified.add(post["id"])
-                    on_post(post)
+                    if on_post(post) is True:  # nguoi goi da du bai (--comment-test)
+                        stop = True
+                        break
+        if stop:
+            log.info("Da du bai can, dung cuon o vong %d", round_no)
+            return [post for post in unique_posts(posts.values()) if is_recent(post, days)]
         log.debug("Vong %d: %d khung, %d bai goc, %d trong %s, %d can in, %d bai cu lien tiep",
                   round_no, len(cards), len(posts), len(recent), window,
                   sum(p["candidate"] for p in recent), old_streak)
@@ -431,13 +439,229 @@ def print_diagnostics(page, group, config):
         }, ensure_ascii=False, indent=2))
 
 
-def save_snapshot(page, name):
-    """Luu anh man hinh + HTML vao logs/ de xem Facebook dang hien gi luc loi (chi khi --debug)."""
-    stem = LOG_DIR / f"{time.strftime('%Y%m%d-%H%M%S')}-{re.sub(r'[^a-z0-9]+', '-', normalize(name)).strip('-')}"
+# ======================================================= 3. Binh luan vao bai
+
+# O nhap binh luan cua bai (khong phai o tra loi binh luan, o dang bai nhom hay Messenger).
+COMMENT_BOX_LABEL = re.compile(
+    r"^(?:write a (?:public )?comment|comment as |write an answer|viết bình luận|bình luận dưới tên"
+    r"|bình luận với tư cách|viết câu trả lời)", re.I)
+COMMENT_BUTTON_LABELS = ("Viết bình luận", "Bình luận", "Leave a comment", "Comment")
+JOIN_LABELS = ("Tham gia nhóm", "Join group")
+BLOCK_TEXT = re.compile(
+    r"we limit how often|can.t use this feature|going too fast|against our community standards"
+    r"|temporarily blocked|misusing (?:this|a) feature"
+    r"|chúng tôi giới hạn tần suất|tạm thời bị chặn|không thể dùng tính năng|tiêu chuẩn cộng đồng", re.I)
+COMMENT_MUTATION = "CreateComment"  # useCometUFICreateCommentMutation
+
+
+class CommentError(RuntimeError):
+    """Chua bam gui (khong thay o binh luan, go sai chu...): co the thu lai luot sau."""
+
+
+class CommentUncertain(RuntimeError):
+    """Da bam gui nhung khong xac nhan duoc: KHONG thu lai (tranh binh luan hai lan)."""
+
+
+class CommentBlocked(RuntimeError):
+    """Facebook bao gioi han/chan binh luan: dung binh luan nhieu ngay.
+
+    submitted=True: bao sau khi da bam Enter, binh luan co the da len (khong dang lai).
+    """
+    submitted = False
+
+
+def _letters(text):
+    """So sanh noi dung go vao: bo emoji, dau cau, khoang trang (Facebook doi emoji thanh anh)."""
+    return re.sub(r"[\W_]+", "", unicodedata.normalize("NFC", text or "").lower())
+
+
+def _comment_scope(page):
+    """Bai mo trong hop thoai thi chi tim trong hop thoai tren cung; khong thi trong vung chinh."""
+    dialogs = page.locator('[role="dialog"]:visible')
+    for index in range(dialogs.count() - 1, -1, -1):
+        dialog = dialogs.nth(index)
+        if dialog.locator('[role="textbox"][contenteditable="true"]').count():
+            return dialog
+    main = page.locator('[role="main"]')
+    return main.first if main.count() else page.locator("body")
+
+
+def _comment_boxes(scope):
+    boxes = scope.locator('[role="textbox"][contenteditable="true"]:visible')
+    found, labels = [], []
+    for index in range(boxes.count()):
+        box = boxes.nth(index)
+        label = (box.get_attribute("aria-label") or box.get_attribute("aria-placeholder") or "").strip()
+        labels.append(label)
+        if COMMENT_BOX_LABEL.search(label):
+            found.append(box)
+    return found, labels
+
+
+def _block_notice(page):
+    """Noi dung thong bao gioi han/chan cua Facebook dang hien, hoac ""."""
+    for selector in ('[role="dialog"]:visible', '[role="alert"]:visible'):
+        notes = page.locator(selector)
+        try:
+            count = notes.count()
+        except Exception:
+            continue
+        for index in range(count):
+            note = notes.nth(index)
+            try:
+                # Hop thoai chua bai/binh luan la noi dung nguoi dung, khong phai thong bao cua Facebook.
+                if note.locator(f'[role="article"], [role="textbox"], {MESSAGE_SELECTOR}').count():
+                    continue
+                text = note.inner_text(timeout=1000)
+            except Exception:
+                continue
+            if BLOCK_TEXT.search(text):
+                return "Facebook gioi han binh luan: " + " ".join(text.split())[:160]
+    return ""
+
+
+def _comment_link(url, created):
+    """Link toi thang binh luan vua tao (url bai + ?comment_id=); khong doc duoc id thi tra ve url bai."""
+    stack, ids = [created], []
+    while stack:
+        item = stack.pop()
+        if isinstance(item, dict):
+            for key, value in item.items():
+                if key == "url" and isinstance(value, str) and "comment_id=" in value:
+                    return value
+                if key in ("legacy_fbid", "id") and isinstance(value, (str, int)):
+                    ids.append(str(value))
+                stack.append(value)
+        elif isinstance(item, list):
+            stack.extend(item)
+    for value in ids:
+        if not value.isdigit():  # id dang base64 "comment:<bai>_<binh luan>"
+            try:
+                value = base64.b64decode(value + "=" * (-len(value) % 4)).decode()
+            except (ValueError, UnicodeDecodeError):
+                continue
+            value = value.rsplit("_", 1)[-1] if value.startswith("comment:") else ""
+        if value.isdigit():
+            return f"{url.split('?')[0]}?comment_id={value}"
+    return url
+
+
+def _comment_result(response):
+    """dict comment_create neu Facebook tao binh luan; chuoi loi neu bi tu choi."""
+    body = response.text()
+    errors = []
+    for chunk in body.removeprefix("for (;;);").splitlines():
+        try:
+            data = json.loads(chunk)
+        except ValueError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        created = (data.get("data") or {}).get("comment_create")
+        if created:
+            return created if isinstance(created, dict) else {"ok": created}
+        for error in data.get("errors") or []:
+            parts = [str(error.get(k) or "") for k in ("summary", "description", "message")] \
+                if isinstance(error, dict) else []
+            errors.append((" ".join(part for part in parts if part) or str(error))[:300])
+    return "; ".join(errors) or "Facebook khong xac nhan"
+
+
+def post_comment(page, url, text, before_submit=None):
+    """Mo bai, go `text` (mot dong) vao o binh luan, bam Enter MOT lan, xac nhan qua phan hoi mang.
+
+    before_submit(): goi ngay truoc khi bam Enter (ghi DB "da binh luan" de bi tat giua chung
+    cung khong dang lai). Tra ve (canh_bao, link): canh_bao "" hoac noi dung neu da dang nhung
+    Facebook bao gioi han ngay sau do; link toi binh luan (hoac link bai). Nem CommentError (loi truoc khi bam gui, ngoai le Playwright khac
+    cung la truoc khi gui), CommentUncertain (da bam gui, khong ro ket qua: khong thu lai),
+    CommentBlocked (Facebook chan), SessionExpired.
+    """
+    text = " ".join(text.split())  # \n trong press_sequentially = Enter = gui giua chung
+    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    check_access(page)
+    page.wait_for_timeout(random.randint(3000, 5000))  # doc bai nhu nguoi that
+    check_access(page)
+    if notice := _block_notice(page):
+        raise CommentBlocked(notice)
+
+    scope = _comment_scope(page)
+    boxes, labels = _comment_boxes(scope)
+    if not boxes:
+        for label in COMMENT_BUTTON_LABELS:  # bai nhieu binh luan: o nhap chi hien sau khi bam nut
+            button = scope.locator(f'[role="button"][aria-label="{label}"]:visible')
+            if button.count():
+                button.first.click(timeout=3000)
+                page.wait_for_timeout(1500)
+                scope = _comment_scope(page)
+                boxes, labels = _comment_boxes(scope)
+                break
+    if len(boxes) != 1:
+        if not boxes and any(page.get_by_role("button", name=name).count() for name in JOIN_LABELS):
+            raise CommentError("tai khoan chua la thanh vien nhom")
+        raise CommentError(f"tim thay {len(boxes)} o binh luan (o nhap tren trang: {labels[:6]}); "
+                           "bai tat binh luan hoac Facebook doi giao dien")
+    box = boxes[0]
+    label = box.get_attribute("aria-label") or ""
+    if label.lower().startswith(("comment as", "bình luận dưới tên", "bình luận với tư cách")):
+        log.info("O binh luan: %s", label)  # kiem tra dung tai khoan/Trang dang binh luan
+
+    box.scroll_into_view_if_needed(timeout=5000)
+    box.click(timeout=5000)
+    if not box.evaluate("el => el === document.activeElement || el.contains(document.activeElement)"):
+        raise CommentError("khong dat duoc con tro vao o binh luan")
+    if box.inner_text().strip():  # ban nhap cu Facebook giu lai
+        box.press("Control+a")
+        box.press("Backspace")
+        page.wait_for_timeout(400)
+    page.wait_for_timeout(random.randint(1000, 3000))
+    box.press_sequentially(text, delay=random.randint(25, 70))
+    page.wait_for_timeout(random.randint(1500, 3000))  # cho xem truoc link
+
+    def clear():
+        box.press("Control+a")
+        box.press("Backspace")
+
+    if page.locator('[role="listbox"]:visible').count():
+        clear()
+        raise CommentError("Facebook mo goi y nhac ten/hashtag; huy de khong gan nham")
+    typed = box.inner_text()
+    if _letters(typed) != _letters(text):
+        clear()
+        raise CommentError(f"chu go vao khong khop: {' '.join(typed.split())[:80]!r}")
+
+    def is_comment_request(response):
+        request = response.request
+        return (request.method == "POST" and "/api/graphql" in response.url
+                and (COMMENT_MUTATION in request.headers.get("x-fb-friendly-name", "")
+                     or COMMENT_MUTATION in (request.post_data or "")))
+
+    if before_submit:
+        before_submit()
     try:
-        LOG_DIR.mkdir(exist_ok=True)
-        page.screenshot(path=f"{stem}.png")
-        Path(f"{stem}.html").write_text(page.content(), encoding="utf-8")
-        log.info("Da luu anh chup luc loi: %s.png / .html", stem)
-    except Exception as error:
-        log.warning("Khong luu duoc anh chup: %s", error)
+        with page.expect_response(is_comment_request, timeout=25000) as info:
+            box.press("Enter")
+        result = _comment_result(info.value)
+    except Exception as error:  # het thoi gian cho / khong doc duoc phan hoi / trang dong
+        result = error
+    # Da bam Enter: tu day moi loi deu la "khong ro", khong bao gio thu lai.
+    try:
+        page.wait_for_timeout(2000)
+        notice = _block_notice(page)
+    except Exception:
+        notice = ""
+    if isinstance(result, dict):
+        return notice, _comment_link(url, result)
+    if isinstance(result, str) and BLOCK_TEXT.search(result):
+        raise CommentBlocked(f"Facebook gioi han binh luan: {result}")  # Facebook tu choi, chua dang
+    if notice:
+        error = CommentBlocked(notice)
+        error.submitted = True
+        raise error
+    if isinstance(result, str):
+        raise CommentUncertain(f"Facebook tra loi loi: {result}")
+    try:
+        cleared = not box.inner_text(timeout=2000).strip()
+    except Exception:
+        cleared = False
+    raise CommentUncertain(("o binh luan da trong" if cleared else "o binh luan con chu")
+                           + f" nhung khong thay phan hoi Facebook ({type(result).__name__})")

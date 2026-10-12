@@ -31,5 +31,52 @@
   "expand_labels": [
     "Xem thêm",
     "See more"
-  ]
+  ],
+  "exclude_keywords": [
+    "HN",
+    "Hà Nội",
+    "Hanoi",
+    "Hà Đông",
+    "Cầu Giấy",
+    "Long Biên",
+    "Từ Liêm",
+    "Hoàn Kiếm",
+    "Tây Hồ",
+    "in resin",
+    "máy resin",
+    "nhựa resin",
+    "resin 8k",
+    "resin 12k",
+    "pass máy in",
+    "pass máy",
+    "pass lại",
+    "thanh lý",
+    "bán máy",
+    "mua máy",
+    "máy in cũ",
+    "scan 3d",
+    "cnc"
+  ],
+  "ai": {
+    "enabled": true,
+    "model": "gemma4:e2b",
+    "website": "infinitemakerspace.com",
+    "business_file": "makerspace.md",
+    "max_posts_per_run": 20,
+    "max_comments_per_run": 3,
+    "max_comments_per_day": 8,
+    "max_comments_per_group_per_day": 3,
+    "comment_gap_seconds": [
+      480,
+      1200
+    ],
+    "active_hours": [
+      8,
+      22
+    ],
+    "min_post_age_minutes": 10,
+    "blocked_cooldown_hours": 72,
+    "max_comment_chars": 180,
+    "notify_zalo": true
+  }
 }

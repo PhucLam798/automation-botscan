@@ -3,8 +3,9 @@ import json
 import logging
 import os
 import sys
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
+
+from .lead_filter import exclude_pattern
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_FILE = ROOT / "config.json"
@@ -12,8 +13,6 @@ ENV_FILE = ROOT / ".env"
 ENV_EXAMPLE = ROOT / ".env.example"
 DB_FILE = ROOT / "posts.sqlite3"
 PROFILE_DIR = ROOT / "browser-profile"
-LOG_DIR = ROOT / "logs"
-LOG_FILE = LOG_DIR / "bot.log"
 
 # Facebook bat dang nhap lai: systemd khong tu khoi dong lai voi ma nay.
 EXIT_SESSION_EXPIRED = 42
@@ -25,6 +24,25 @@ DEFAULTS = {
     "max_scroll_rounds": 80,
     "article_selector": "[role='article']",
     "expand_labels": ["Xem thêm", "See more"],
+    "exclude_keywords": [],   # bai chua mot trong cac tu nay thi bo (khong gui Zalo, khong binh luan)
+}
+
+# Binh luan AI (Ollama local): muc "ai" trong config.json ghi de tung khoa.
+AI_DEFAULTS = {
+    "enabled": True,              # chay chinh (python3 main.py) co binh luan that
+    "model": "gemma4:e2b",        # model Ollama (ollama list)
+    "business_file": "makerspace.md",  # thong tin makerspace cho AI (chi duoc noi dieu co trong file)
+    "website": "infinitemakerspace.com",  # link duy nhat trong binh luan, luon co
+    "max_posts_per_run": 20,      # so bai AI doc moi luot (CPU cham: ~20-60 giay/bai)
+    "max_comments_per_run": 3,
+    "max_comments_per_day": 8,    # tinh 24 gio gan nhat; tuan dau nen de 2-3
+    "max_comments_per_group_per_day": 3,
+    "comment_gap_seconds": [480, 1200],  # nghi ngau nhien 8-20 phut giua hai binh luan
+    "active_hours": [8, 22],      # chi binh luan tu 8:00 den truoc 22:00 (gio may)
+    "min_post_age_minutes": 10,   # khong tra loi ngay khi bai vua dang (giong bot)
+    "blocked_cooldown_hours": 72, # Facebook bao gioi han -> ngung binh luan
+    "max_comment_chars": 180,     # ngan gon: 1-2 cau
+    "notify_zalo": True,          # bao vao nhom Zalo moi binh luan da dang
 }
 
 log = logging.getLogger(__name__)
@@ -59,7 +77,35 @@ def load_config(path=CONFIG_FILE):
 
     config["interval_seconds"] = max(60, int(config["interval_seconds"]))
     config["lookback_days"] = max(1 / 24, float(config["lookback_days"]))
+    if not isinstance(config["exclude_keywords"], list):
+        raise ConfigError('config.json: "exclude_keywords" phai la danh sach ["HN", "in resin", ...]')
+    config["exclude_re"] = exclude_pattern(config["exclude_keywords"])
+    config["ai"] = load_ai_config(config.get("ai"))
     return config
+
+
+def load_ai_config(data):
+    if data is not None and not isinstance(data, dict):
+        raise ConfigError('config.json: "ai" phai la mot object {...}')
+    ai = {**AI_DEFAULTS, **(data or {})}
+    try:
+        for key in ("max_posts_per_run", "max_comments_per_run", "max_comments_per_day",
+                    "max_comments_per_group_per_day", "max_comment_chars", "min_post_age_minutes",
+                    "blocked_cooldown_hours"):
+            ai[key] = max(0, int(ai[key]))
+        gap = ai["comment_gap_seconds"]
+        low, high = (gap, gap) if isinstance(gap, (int, float)) else gap
+        ai["comment_gap_seconds"] = (max(30, float(low)), max(30, float(low), float(high)))
+        start, end = ai["active_hours"]
+        ai["active_hours"] = (int(start) % 24, int(end) % 24 or 24)
+    except (TypeError, ValueError):
+        raise ConfigError('config.json: muc "ai" co gia tri so khong hop le') from None
+    ai["max_comment_chars"] = max(100, ai["max_comment_chars"])
+    ai["model"] = str(ai["model"]).strip()
+    ai["website"] = str(ai["website"]).strip().removeprefix("https://").removeprefix("http://").strip("/")
+    if not ai["website"]:
+        raise ConfigError('config.json: "ai.website" khong duoc de trong')
+    return ai
 
 
 # ----------------------------------------------------------------------- .env
@@ -103,7 +149,7 @@ def save_env_value(key, value, path=ENV_FILE):
 # -------------------------------------------------------------------- logging
 
 def setup_logging(debug=False):
-    """Man hinh: INFO (DEBUG neu --debug). logs/bot.log: luon DEBUG, kem traceback day du."""
+    """Chi in ra man hinh (khong luu file): INFO, DEBUG neu --debug. Chay service: xem bang journalctl."""
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
     root.handlers.clear()
@@ -113,17 +159,7 @@ def setup_logging(debug=False):
     console.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(message)s", "%H:%M:%S"))
     root.addHandler(console)
 
-    try:
-        LOG_DIR.mkdir(exist_ok=True)
-        file = RotatingFileHandler(LOG_FILE, maxBytes=2_000_000, backupCount=3, encoding="utf-8")
-    except OSError as error:
-        log.warning("Khong ghi duoc file log %s: %s", LOG_FILE, error)
-    else:
-        file.setLevel(logging.DEBUG)
-        file.setFormatter(logging.Formatter(
-            "%(asctime)s %(levelname)-7s [%(name)s] %(message)s", "%Y-%m-%d %H:%M:%S"))
-        root.addHandler(file)
-
     # Thu vien ben ngoai chi can canh bao.
-    for name in ("asyncio", "urllib3"):
-        logging.getLogger(name).setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    # Ctrl+C luc Playwright dang chay de lai "Task was destroyed..." vo hai: an di.
+    logging.getLogger("asyncio").setLevel(logging.CRITICAL)
