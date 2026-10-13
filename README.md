@@ -55,9 +55,12 @@ Tùy chọn: `--group "Tên"`, `--hours N`, `--headed` (hiện trình duyệt), 
 |---|---|---|
 | `enabled` | `true` | `false` = chỉ gửi link Zalo, không bình luận |
 | `model` | `gemma4:e2b` | Model Ollama. Máy mạnh hơn có thể dùng `gemma4:e4b` (chạy `ollama pull gemma4:e4b` trước) |
-| `website` | `infinitemakerspace.com` | Link duy nhất trong bình luận, luôn có |
+| `website` | `infinitemakerspace.com` | Luôn gắn cuối bình luận |
+| `facebook_page` | `facebook.com/infinitestudiomakerspace` | Fanpage, gắn cuối bình luận trước website (`""` = không gắn) |
+| `facebook_page_name` | `Infinite Makerspace` | Tên Trang trong gợi ý @ của Facebook. Bot gõ `@infinitestudiomakerspace` rồi chọn gợi ý này để tag thật; không thấy gợi ý thì dùng link fanpage. `""` = chỉ gắn link |
+| `temperature` | `0.8` | Cao hơn thì bình luận sáng tạo, đa dạng hơn; thấp hơn thì đều và an toàn hơn |
 | `business_file` | `makerspace.md` | Thông tin dịch vụ cho AI. AI chỉ được nói điều có trong file này |
-| `max_comment_chars` | `180` | Độ dài tối đa |
+| `max_comment_chars` | `220` | Độ dài tối đa phần AI viết (chưa tính link ở cuối) |
 | `max_posts_per_run` | `20` | Số bài AI đọc mỗi lượt |
 | `max_comments_per_run` / `_per_day` / `_per_group_per_day` | `3` / `8` / `3` | Giới hạn bình luận. Tuần đầu nên để `_per_day` ở 2-3 |
 | `comment_gap_seconds` | `[480, 1200]` | Nghỉ 8-20 phút giữa hai bình luận |
@@ -66,9 +69,9 @@ Tùy chọn: `--group "Tên"`, `--hours N`, `--headed` (hiện trình duyệt), 
 | `blocked_cooldown_hours` | `72` | Facebook báo giới hạn thì ngừng bình luận |
 | `notify_zalo` | `true` | Báo vào Zalo mỗi bình luận đã đăng, kèm link để kiểm tra |
 
-Muốn đổi giọng văn hoặc cách chốt khách thì sửa `PROMPT` trong `bot/commenter.py`.
+Muốn đổi giọng văn hoặc cách chốt khách thì sửa `PROMPT` trong `bot/commenter.py`. Mỗi bài, bot chọn ngẫu nhiên cách kết `CTA_ON` (rủ ib/ghé trang) hoặc `CTA_OFF` (kết bằng mẹo/câu hỏi lại), tỉ lệ `CTA_CHANCE`, và đưa 5 bình luận gần nhất cho AI để tránh lặp. AI trả về `quang_cao` (bên bán tự chào hàng: không bình luận, không gửi Zalo) và `reply` (có bình luận không). Vì vậy khi bình luận AI đang bật, link khách được gửi vào Zalo sau khi AI đọc xong bài. Bình luận xong, bot gửi vào Zalo nội dung bài, câu AI đã bình luận, link bài và link bình luận.
 
-Trước khi đăng, bình luận được kiểm tra: có `@`, số điện thoại hoặc link khác website thì bỏ; quá dài thì cắt theo câu; thiếu website thì tự thêm. Bình luận giống một bình luận gần đây cũng bị bỏ để tránh bị coi là spam.
+Trước khi đăng, bình luận được kiểm tra: có `@`, số điện thoại hoặc link lạ thì bỏ; quá dài thì cắt theo câu; link fanpage và website do code tự gắn ở cuối. Bình luận giống một bình luận gần đây cũng bị bỏ để tránh bị coi là spam.
 
 `.env`: `ZALO_BOT_TOKEN`, `ZALO_CHAT_ID`, và tùy chọn `OLLAMA_HOST`.
 

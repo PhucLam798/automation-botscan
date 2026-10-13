@@ -281,6 +281,52 @@ def check_access(page):
         raise SessionExpired("Facebook yeu cau dang nhap/xac minh. Dung bot va chay: python3 main.py --login")
 
 
+# Trang hoi dong y cookie (may o chau Au, vd VPS Contabo): bam qua roi mo lai trang can doc.
+CONSENT_BUTTON = re.compile(
+    r"^(?:decline optional cookies|only allow essential cookies|allow all cookies|accept all"
+    r"|từ chối cookie không bắt buộc|chỉ cho phép cookie thiết yếu|cho phép tất cả cookie|chấp nhận tất cả)", re.I)
+CONSENT_NEXT = re.compile(r"^(?:continue|next|ok|tiếp tục|tiếp|đồng ý)$", re.I)
+
+
+def _on_consent(page):
+    return urllib.parse.urlsplit(page.url).path.startswith("/privacy/consent")
+
+
+def pass_consent(page):
+    """Neu dang o trang dong y cookie thi bam chon (uu tien tu choi cookie khong bat buoc). True neu da qua."""
+    if not _on_consent(page):
+        return False
+    for _ in range(4):  # co the nhieu buoc: Tiep tuc -> chon cookie
+        page.wait_for_timeout(2000)
+        clicked = False
+        for pattern in (CONSENT_BUTTON, CONSENT_NEXT):
+            buttons = page.get_by_role("button", name=pattern)
+            if buttons.count():
+                buttons.first.click(timeout=5000)
+                clicked = True
+                break
+        if not clicked:
+            break
+        page.wait_for_timeout(3000)
+        if not _on_consent(page):
+            log.info("Da bam qua trang dong y cookie cua Facebook")
+            return True
+    if _on_consent(page):
+        labels = [" ".join(t.split())[:40] for t in page.get_by_role("button").all_inner_texts()[:10]]
+        raise ScanError(f"Ket o trang dong y cookie cua Facebook (nut thay duoc: {labels}). "
+                        "Dang nhap bang ssh -X roi --login de bam tay mot lan")
+    return True
+
+
+def goto(page, url):
+    """Mo trang Facebook; gap trang dong y cookie thi bam qua roi mo lai url."""
+    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    page.wait_for_timeout(1500)  # Facebook co the chuyen sang trang cookie sau khi tai xong
+    if pass_consent(page):
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    check_access(page)
+
+
 def read_cards(page, config, reveal_dates=False):
     selectors = {"article": config["article_selector"], "message": MESSAGE_SELECTOR}
     cards = page.evaluate(EXTRACT_JS, selectors)
@@ -346,8 +392,7 @@ def scan_group(page, group, config, on_post=None):
     days = config["lookback_days"]
     window = window_label(days)
     log.info("Dang doc nhom: %s (bai trong %s)", group["name"], window)
-    page.goto(chronological_url(group["url"]), wait_until="domcontentloaded", timeout=60000)
-    check_access(page)
+    goto(page, chronological_url(group["url"]))
     try:
         page.locator(MESSAGE_SELECTOR).first.wait_for(timeout=30000)
     except Exception:
@@ -567,18 +612,41 @@ def _comment_result(response):
     return "; ".join(errors) or "Facebook khong xac nhan"
 
 
-def post_comment(page, url, text, before_submit=None):
+def _type_mention(page, box, handle, name, fallback):
+    """Go "@handle", chon dung goi y `name` cua Facebook (thanh tag). Tra ve chu da go:
+    "@name" neu tag duoc (o hien `name`), khong thi xoa "@handle" va go `fallback` (link fanpage)."""
+    typed = "@" + handle
+    box.press_sequentially(typed, delay=random.randint(60, 120))
+    option = page.locator('[role="listbox"]:visible [role="option"]').filter(has_text=name)
+    try:
+        option.first.wait_for(state="visible", timeout=8000)
+        option.first.click(timeout=3000)
+        page.wait_for_timeout(800)
+        return "@" + name
+    except Exception as error:
+        log.warning("Khong tag duoc @%s (%s): dung link fanpage", handle, type(error).__name__)
+    for _ in typed:
+        box.press("Backspace")
+    page.wait_for_timeout(500)
+    box.press_sequentially(fallback, delay=random.randint(25, 70))
+    return fallback
+
+
+def post_comment(page, url, text, before_submit=None, mention=None):
     """Mo bai, go `text` (mot dong) vao o binh luan, bam Enter MOT lan, xac nhan qua phan hoi mang.
+
+    mention = (handle, ten, link): cho "@ten" trong text thi go "@handle" va chon goi y `ten`
+    (tag Trang that); Facebook khong goi y thi thay bang `link`.
 
     before_submit(): goi ngay truoc khi bam Enter (ghi DB "da binh luan" de bi tat giua chung
     cung khong dang lai). Tra ve (canh_bao, link): canh_bao "" hoac noi dung neu da dang nhung
-    Facebook bao gioi han ngay sau do; link toi binh luan (hoac link bai). Nem CommentError (loi truoc khi bam gui, ngoai le Playwright khac
+    Facebook bao gioi han ngay sau do; link toi binh luan (hoac link bai); chu da dang (tag thanh ten Trang,
+    hoac link neu khong tag duoc). Nem CommentError (loi truoc khi bam gui, ngoai le Playwright khac
     cung la truoc khi gui), CommentUncertain (da bam gui, khong ro ket qua: khong thu lai),
     CommentBlocked (Facebook chan), SessionExpired.
     """
     text = " ".join(text.split())  # \n trong press_sequentially = Enter = gui giua chung
-    page.goto(url, wait_until="domcontentloaded", timeout=60000)
-    check_access(page)
+    goto(page, url)
     page.wait_for_timeout(random.randint(3000, 5000))  # doc bai nhu nguoi that
     check_access(page)
     if notice := _block_notice(page):
@@ -614,7 +682,15 @@ def post_comment(page, url, text, before_submit=None):
         box.press("Backspace")
         page.wait_for_timeout(400)
     page.wait_for_timeout(random.randint(1000, 3000))
-    box.press_sequentially(text, delay=random.randint(25, 70))
+    tag = "@" + mention[1] if mention else ""
+    if tag and tag in text:
+        before, after = text.split(tag, 1)
+        box.press_sequentially(before, delay=random.randint(25, 70))
+        shown = _type_mention(page, box, *mention)
+        box.press_sequentially(after, delay=random.randint(25, 70))
+        text = before + shown + after
+    else:
+        box.press_sequentially(text, delay=random.randint(25, 70))
     page.wait_for_timeout(random.randint(1500, 3000))  # cho xem truoc link
 
     def clear():
@@ -650,7 +726,7 @@ def post_comment(page, url, text, before_submit=None):
     except Exception:
         notice = ""
     if isinstance(result, dict):
-        return notice, _comment_link(url, result)
+        return notice, _comment_link(url, result), text
     if isinstance(result, str) and BLOCK_TEXT.search(result):
         raise CommentBlocked(f"Facebook gioi han binh luan: {result}")  # Facebook tu choi, chua dang
     if notice:

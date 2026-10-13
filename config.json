@@ -55,12 +55,31 @@
     "mua máy",
     "máy in cũ",
     "scan 3d",
-    "cnc"
+    "cnc",
+    "in kim loại",
+    "bằng kim loại",
+    "in 3d kim loại",
+    "xưởng in kim loại",
+    "kim loại in 3d",
+    "in inox",
+    "in thép",
+    "in nhôm",
+    "in titan",
+    "inox",
+    "titan",
+    "3d nhôm",
+    "3d thép",
+    "metal 3d",
+    "SLM",
+    "DMLS"
   ],
   "ai": {
     "enabled": true,
     "model": "gemma4:e2b",
     "website": "infinitemakerspace.com",
+    "facebook_page": "facebook.com/infinitestudiomakerspace",
+    "facebook_page_name": "Infinite Makerspace",
+    "temperature": 0.8,
     "business_file": "makerspace.md",
     "max_posts_per_run": 20,
     "max_comments_per_run": 3,
@@ -76,7 +95,7 @@
     ],
     "min_post_age_minutes": 10,
     "blocked_cooldown_hours": 72,
-    "max_comment_chars": 180,
+    "max_comment_chars": 220,
     "notify_zalo": true
   }
 }

@@ -113,13 +113,21 @@ SELLER = [
     r"\b(?:nhan in|nhan gia cong)\b.{0,30}\b(?:theo yeu cau|moi chat lieu|so luong lon|gia re|gia tot|lay lien|lay nhanh|toan quoc)\b",
     r"\b(?:in 3d|dich vu in)\s+(?:gia re|gia tot|uy tin|chat luong|theo yeu cau)\b",
     r"\b(?:ung ho|support)\s+(?:minh|em|shop)\b",
+    # "CAN IN 3D? CO NGAY! 500d/g": tieu de cau khach cua ben ban
+    r"\b(?:can|muon)?\s*in\s*(?:3d|resin|fdm)\b.{0,40}\b(?:co ngay|lay ngay|lay lien|co lien|gia chi)\b",
+    # gia theo gram + moi lien he
+    r"\d+\s*(?:k|d|vnd|dong)\s*/\s*(?:g|gr|gram|gam)\b.{0,150}\b(?:inbox|lien he|bao gia|zalo|hotline)\b",
+    r"\b(?:minh|em|ben minh|ben em|shop)\s+(?:se\s+)?(?:tu van|bao gia)\b(?!\s+(?:giup|dum|duoc|voi|cho minh|cho em))",
+    r"\bgui\s+(?:mau|file|hinh|anh)\s+qua\s+inbox\b",
 ]
 AD_SIGNALS = [
     r"\bgia (?:re|tot|uu dai|hat de|canh tranh|chi tu)\b", r"\bchi tu\s*\d", r"\buy tin\b",
     r"\bchat luong cao\b", r"\bnhanh chong\b", r"\bfreeship|mien phi van chuyen\b",
     r"\bship (?:cod|toan quoc)|\btoan quoc\b", r"\bhotline\b", r"\blien he\b",
     r"\bnhan don\b", r"\bnhan order\b", r"\bkhuyen mai|giam gia|uu dai\b",
-    r"\d+\s*(?:k|d|vnd|dong)\s*/\s*(?:g|gr|gram|gam|cm)\b", r"\b0\d{2}[ .]?\d{3}[ .]?\d{4}\b",
+    r"\d+\s*(?:k|d|vnd|dong)\s*/\s*(?:g|gr|gram|gam|cm)\b", r"\b0\d{2,3}[ .-]?\d{3}[ .-]?\d{3,4}\b",
+    r"\b(?:co|xuat|da gom)\s+vat\b|\bhoa don\b", r"\bson\s+(?:mo hinh|hoan thien)\b",
+    r"\b(?:co ngay|lay ngay|lay lien)\b", r"\b(?:tu van|bao gia)\s*(?:&|va)\s*(?:tu van|bao gia)\b",
     r"\bwebsite|fanpage|www\.", r"\bcam ket\b", r"\bbao hanh\b",
 ]
 

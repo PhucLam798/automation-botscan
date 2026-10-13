@@ -54,6 +54,9 @@ class Runner:
         self.mode = mode
         self.debug = debug
         self.commenter = commenter
+        if commenter:
+            commenter.on_review = self._reviewed
+        self._group = None     # nhom dang quet (cho _on_found)
         self.sent = 0           # so link da gui trong luot quet hien tai
         self._printed = set()   # dry-run: link da in
 
@@ -75,6 +78,7 @@ class Runner:
             self.commenter.start_run()
         errors = []
         for group in self.groups:
+            self._group = group
             try:
                 posts = facebook.scan_group(self.page, group, self.config, on_post=self._on_found)
             except facebook.SessionExpired:
@@ -88,7 +92,7 @@ class Runner:
                 errors.append(f"{group['name']}: {reason}")
                 continue
             self._store(group, posts)
-            if self.commenter:
+            if self.commenter and self.mode == "bootstrap":  # cac che do khac: AI doc tung bai trong _on_found
                 self._comment(self.commenter.process, self.page, group, posts)
         if self.sending:
             self.sent += self.flush_pending()
@@ -155,16 +159,26 @@ class Runner:
                  group["name"], len(posts), added, sum(p["candidate"] for p in posts))
 
     def _on_found(self, post):
-        """Gui ngay bai can in vua tim thay, khong doi quet xong ca nhom."""
-        if self.mode == "ai-test":
-            return
+        """Bai can in vua tim thay: AI doc (_reviewed gui Zalo) roi binh luan luon, xong moi cuon tiep."""
         log.info("Tim thay bai can in: %s", post["url"])
         if self.mode == "dry-run":
             self._print_post(post)
             return
-        self.store.record(post, pending=self.sending)
-        if self.sending:
+        if self.mode != "ai-test":
+            self.store.record(post, pending=self.sending)
+        if self.commenter and self.mode != "bootstrap":
+            self._comment(self.commenter.process, self.page, self._group, [post])
+        if self.sending:  # AI khong doc (tat, ngoai gio, het gioi han, loi): van gui link
             self.sent += self.flush_pending()
+
+    def _reviewed(self, post, result):
+        """AI doc xong, truoc khi dang binh luan: bai quang cao thi khong gui Zalo, con lai gui ngay."""
+        if not self.sending or not post.get("id"):
+            return
+        if result.get("ad"):
+            log.info("AI: bai quang cao, khong gui Zalo: %s", post["url"])
+            self.store.clear_pending(post["id"])
+        self.sent += self.flush_pending()
 
     def _print_post(self, post):
         key = facebook.link_key(post["url"])

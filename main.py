@@ -88,7 +88,7 @@ def cmd_login(config):
         page.goto("https://www.facebook.com/", wait_until="domcontentloaded")
         input("Dang nhap thu cong, hoan tat 2FA neu co; sau do Enter o terminal... ")
         for group in config["groups"]:
-            page.goto(group["url"], wait_until="domcontentloaded")
+            facebook.goto(page, group["url"])
             input(f"Nhom {group['name']}: chon Bai viet moi/New posts, sau do Enter... ")
 
 
@@ -96,7 +96,7 @@ def cmd_inspect(config, group):
     import json
     from bot import facebook
     with facebook.browser_page(headless=False) as page:
-        page.goto(group["url"], wait_until="domcontentloaded")
+        facebook.goto(page, group["url"])
         input("Chon Bai viet moi, mo Xem them cua mot so bai; Enter de xem ket qua... ")
         cards = facebook.read_cards(page, config, reveal_dates=True)
         posts = facebook.extract_cards(cards, group, config["exclude_re"])
@@ -157,9 +157,9 @@ def cmd_comment_test(args, config, groups):
                     continue
 
                 def on_post(post, group=group):
-                    log.info("Bai can in: %s, cho AI doc...", post["url"])
-                    commenter.process(page, group, [post])
-                    return bool(commenter.jobs)  # True: du 1 bai, dung cuon
+                    log.info("Bai can in: %s", post["url"])
+                    commenter.process(page, group, [post])  # AI doc, viet duoc thi dang luon
+                    return commenter.attempted > 0  # True: da dang 1 bai, dung cuon
 
                 try:
                     facebook.scan_group(page, group, config, on_post=on_post)
@@ -167,11 +167,19 @@ def cmd_comment_test(args, config, groups):
                     raise
                 except Exception as error:
                     log.error("Loi nhom %s: %s", group["name"], short_error(error))
-                if commenter.jobs or commenter.ai_halted:
+                if commenter.attempted or commenter.ai_halted:
                     break
-            if not commenter.jobs:
+            if not commenter.attempted:
                 print("\nKhong tim thay bai can in nao de binh luan thu "
                       "(chua binh luan, AI chiu tra loi) trong khung thoi gian.")
+            elif args.headed and commenter.last_link and sys.stdin.isatty():
+                tab = commenter._tab or page
+                try:
+                    facebook.goto(tab, commenter.last_link)  # mo dung binh luan vua dang
+                    tab.bring_to_front()
+                except Exception as error:
+                    log.warning("Khong mo lai duoc link binh luan: %s", short_error(error))
+                input("Xem binh luan tren trinh duyet (chon 'Tat ca binh luan' neu khong thay). Enter de dong... ")
             commenter.finish_run(page)
     finally:
         store.close()

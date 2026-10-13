@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -32,7 +33,10 @@ AI_DEFAULTS = {
     "enabled": True,              # chay chinh (python3 main.py) co binh luan that
     "model": "gemma4:e2b",        # model Ollama (ollama list)
     "business_file": "makerspace.md",  # thong tin makerspace cho AI (chi duoc noi dieu co trong file)
-    "website": "infinitemakerspace.com",  # link duy nhat trong binh luan, luon co
+    "website": "infinitemakerspace.com",  # luon gan cuoi binh luan
+    "facebook_page": "facebook.com/infinitestudiomakerspace",  # fanpage, gan cuoi binh luan ("" = khong gan)
+    "facebook_page_name": "Infinite Makerspace",  # ten Trang trong goi y @ cua Facebook: tag that ("" = chi gan link)
+    "temperature": 0.8,           # cao hon = binh luan sang tao/da dang hon (0.3-1.0)
     "max_posts_per_run": 20,      # so bai AI doc moi luot (CPU cham: ~20-60 giay/bai)
     "max_comments_per_run": 3,
     "max_comments_per_day": 8,    # tinh 24 gio gan nhat; tuan dau nen de 2-3
@@ -102,7 +106,13 @@ def load_ai_config(data):
         raise ConfigError('config.json: muc "ai" co gia tri so khong hop le') from None
     ai["max_comment_chars"] = max(100, ai["max_comment_chars"])
     ai["model"] = str(ai["model"]).strip()
-    ai["website"] = str(ai["website"]).strip().removeprefix("https://").removeprefix("http://").strip("/")
+    ai["website"], ai["facebook_page"] = (re.sub(r"^(?:https?://)?(?:www\.)?", "", str(ai[key]).strip()).strip("/")
+                                          for key in ("website", "facebook_page"))
+    ai["facebook_page_name"] = str(ai["facebook_page_name"]).strip().lstrip("@")
+    try:
+        ai["temperature"] = min(1.5, max(0.0, float(ai["temperature"])))
+    except (TypeError, ValueError):
+        raise ConfigError('config.json: "ai.temperature" phai la so (vd 0.8)') from None
     if not ai["website"]:
         raise ConfigError('config.json: "ai.website" khong duoc de trong')
     return ai
